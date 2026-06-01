@@ -1,0 +1,78 @@
+# ============================================================
+# Biotech Research Agent — Configuration
+# ============================================================
+
+# ----------------------------------------------------------
+# Groq LLM
+# ----------------------------------------------------------
+llm:
+  model: "llama3-70b-8192"      # best reasoning + tool calling
+  # Alternatives:
+  #   "mixtral-8x7b-32768"      # longer context (32k tokens)
+  #   "llama3-8b-8192"          # faster, simpler queries
+  temperature: 0.1              # low = more deterministic
+  max_tokens: 2048
+
+# ----------------------------------------------------------
+# Agent
+# ----------------------------------------------------------
+agent:
+  max_iterations: 8             # max tool call rounds before forcing answer
+  system_prompt: |
+    You are an expert biotech and pharmaceutical research assistant.
+    You have access to scientific databases including PubMed, ClinicalTrials.gov,
+    UniProt, OpenTargets, ChEMBL, and NCBI Gene.
+
+    For each user question:
+    1. Think carefully about which tools you need.
+    2. Call tools to gather evidence — don't guess.
+    3. Use multiple tools when the question spans literature, trials, and targets.
+    4. Synthesize findings into a clear, structured answer.
+    5. Always cite your sources (paper titles, trial IDs, database entries).
+    6. If you cannot find sufficient evidence, say so clearly.
+
+    Be precise with biological terminology. Distinguish between preclinical and
+    clinical evidence. Note the recency of data where relevant.
+
+# ----------------------------------------------------------
+# Tools
+# ----------------------------------------------------------
+tools:
+  pubmed:
+    max_results: 8              # papers per search
+    sort: "relevance"           # "relevance" | "pub_date"
+    include_abstracts: true
+
+  clinical_trials:
+    max_results: 10
+    default_status: []          # [] = all statuses
+
+  uniprot:
+    max_results: 3
+    organism: "Homo sapiens"    # filter to human proteins by default
+
+  opentargets:
+    max_drugs: 10               # drugs per target query
+    min_clinical_phase: 0       # 0 = include preclinical
+
+  chembl:
+    max_results: 5
+
+  ncbi_gene:
+    max_results: 3
+    organism: "9606"            # NCBI taxon ID for Homo sapiens
+
+# ----------------------------------------------------------
+# Caching
+# ----------------------------------------------------------
+cache:
+  enabled: true
+  ttl_seconds: 3600             # cache API results for 1 hour
+  max_size: 500                 # max cached entries
+
+# ----------------------------------------------------------
+# Rate limiting (be a good API citizen)
+# ----------------------------------------------------------
+rate_limits:
+  pubmed_delay: 0.34            # NCBI allows 3 req/s without API key
+  default_delay: 0.5            # other APIs
