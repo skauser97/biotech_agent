@@ -51,11 +51,12 @@ if "agent" not in st.session_state:
     st.session_state.agent = None
 
 
-# ── Build Agent (cached) ─────────────────────────────────────────────────────
-@st.cache_resource
-def get_agent():
-    from agent import build_agent
-    return build_agent()
+# ── Validate config on startup ───────────────────────────────────────────────
+def check_config():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key and os.getenv("LLM_BACKEND", "groq").lower() == "groq":
+        return False, "GROQ_API_KEY not set. Check your .env file or Streamlit secrets."
+    return True, ""
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
@@ -104,11 +105,10 @@ with st.sidebar:
             st.rerun()
 
 
-# ── Load Agent ───────────────────────────────────────────────────────────────
-try:
-    agent = get_agent()
-except Exception as e:
-    st.error(f"Failed to load agent: {e}\n\nCheck your `.env` file.")
+# ── Validate Config ──────────────────────────────────────────────────────────
+ok, err_msg = check_config()
+if not ok:
+    st.error(err_msg)
     st.stop()
 
 
@@ -137,42 +137,31 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Get agent response
+    # Get agent response with fallback
     with st.chat_message("assistant"):
         with st.spinner("Researching..."):
             try:
-                from langchain_core.messages import HumanMessage
+                from agent import run_query_with_fallback
 
-                config = {"configurable": {"thread_id": st.session_state.thread_id}}
-                input_msg = {"messages": [HumanMessage(content=user_input)]}
+                response, model_used, tool_calls_made = run_query_with_fallback(
+                    user_input, st.session_state.thread_id
+                )
 
-                tool_calls_made = []
-                final_response = ""
+                st.markdown(response)
 
-                for chunk in agent.stream(input_msg, config=config, stream_mode="updates"):
-                    if "tools" in chunk:
-                        for msg in chunk["tools"].get("messages", []):
-                            tool_name = getattr(msg, "name", "")
-                            if tool_name and tool_name not in tool_calls_made:
-                                tool_calls_made.append(tool_name)
-
-                    if "agent" in chunk:
-                        for msg in chunk["agent"].get("messages", []):
-                            content = getattr(msg, "content", "")
-                            if content and not getattr(msg, "tool_calls", []):
-                                final_response = content
-
-                st.markdown(final_response)
-
+                # Show model and tools used
+                meta_parts = []
                 if tool_calls_made:
                     tools_html = " ".join(
                         f'<span class="tool-badge">{t}</span>' for t in tool_calls_made
                     )
-                    st.markdown(f"Tools used: {tools_html}", unsafe_allow_html=True)
+                    meta_parts.append(f"Tools: {tools_html}")
+                meta_parts.append(f'<span style="color: #888; font-size: 0.75rem;">Model: {model_used}</span>')
+                st.markdown(" &nbsp;|&nbsp; ".join(meta_parts), unsafe_allow_html=True)
 
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": final_response,
+                    "content": response,
                     "tools_used": tool_calls_made,
                 })
 
@@ -180,8 +169,7 @@ if user_input:
                 err = str(e)
                 if "tool_use_failed" in err or "Failed to call a function" in err:
                     st.error(
-                        "Tool calling failed — the model produced a malformed response. "
-                        "This happens intermittently. Please try again."
+                        "All models failed tool calling. Please try rephrasing your question."
                     )
                 else:
                     st.error(f"Error: {err[:500]}")

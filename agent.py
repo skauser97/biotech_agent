@@ -57,25 +57,23 @@ CRITICAL TOOL USE RULES:
 Format your responses clearly with paper titles bolded, links on their own line, and a brief "Key Takeaway" at the end when synthesizing multiple sources.
 """
 
+# ── Groq Fallback Models ─────────────────────────────────────────────────────
+# Ordered by preference. If one fails tool calling, the next is tried.
+GROQ_FALLBACK_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",  # best, newest
+    "qwen/qwen3-32b",                              # strong alternative
+    "llama-3.1-8b-instant",                         # fastest, most reliable
+]
+
+
 # ── LLM Factory ───────────────────────────────────────────────────────────────
-def get_llm():
+def get_llm(model_override=None):
     """Return configured LLM based on LLM_BACKEND env var."""
     backend = os.getenv("LLM_BACKEND", "groq").lower()
 
     if backend == "groq":
         from langchain_groq import ChatGroq
-        # Current Groq models confirmed to support local tool calling (May 2026):
-        #   - meta-llama/llama-4-scout-17b-16e-instruct  ← best, newest (DEFAULT)
-        #   - llama-3.1-8b-instant                       ← fastest, reliable
-        #   - qwen/qwen3-32b                             ← strong alternative
-        #
-        # DECOMMISSIONED (do not use):
-        #   - llama3-groq-70b-8192-tool-use-preview      ← gone
-        #   - llama3-groq-8b-8192-tool-use-preview       ← gone
-        #
-        # AVOID for tool calling with LangChain:
-        #   - llama-3.3-70b-versatile  ← generates malformed <function=...> XML calls
-        model = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+        model = model_override or os.getenv("GROQ_MODEL", GROQ_FALLBACK_MODELS[0])
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not set in .env")
@@ -84,7 +82,7 @@ def get_llm():
 
     elif backend == "ollama":
         from langchain_ollama import ChatOllama
-        model = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+        model = model_override or os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         print(f"  Using Ollama → {model} @ {base_url}")
         return ChatOllama(model=model, base_url=base_url, temperature=0)
@@ -94,9 +92,9 @@ def get_llm():
 
 
 # ── Agent Builder ─────────────────────────────────────────────────────────────
-def build_agent():
+def build_agent(model_override=None):
     """Build and return the LangGraph ReAct agent."""
-    llm = get_llm()
+    llm = get_llm(model_override)
     agent = create_react_agent(
         model=llm,
         tools=TOOLS,
@@ -105,7 +103,68 @@ def build_agent():
     return agent
 
 
-# ── Single-query helper ───────────────────────────────────────────────────────
+def get_fallback_models():
+    """Return the list of fallback models for the current backend."""
+    backend = os.getenv("LLM_BACKEND", "groq").lower()
+    if backend == "groq":
+        return GROQ_FALLBACK_MODELS
+    return []
+
+
+# ── Single-query with fallback ───────────────────────────────────────────────
+def run_query_with_fallback(query: str, thread_id: str = "default"):
+    """Run a query with automatic model fallback on tool-calling failures.
+    Returns (response_text, model_used, tools_used).
+    """
+    from langchain_core.messages import HumanMessage
+
+    models = get_fallback_models()
+    primary_model = os.getenv("GROQ_MODEL", models[0] if models else None)
+
+    # Build ordered list: primary first, then fallbacks (skip duplicates)
+    model_queue = [primary_model] if primary_model else []
+    for m in models:
+        if m not in model_queue:
+            model_queue.append(m)
+
+    last_error = None
+    for model in model_queue:
+        try:
+            agent = build_agent(model_override=model)
+            config = {"configurable": {"thread_id": thread_id}}
+            input_msg = {"messages": [HumanMessage(content=query)]}
+
+            tool_calls_made = []
+            final_response = ""
+
+            for chunk in agent.stream(input_msg, config=config, stream_mode="updates"):
+                if "tools" in chunk:
+                    for msg in chunk["tools"].get("messages", []):
+                        tool_name = getattr(msg, "name", "")
+                        if tool_name and tool_name not in tool_calls_made:
+                            tool_calls_made.append(tool_name)
+
+                if "agent" in chunk:
+                    for msg in chunk["agent"].get("messages", []):
+                        content = getattr(msg, "content", "")
+                        if content and not getattr(msg, "tool_calls", []):
+                            final_response = content
+
+            return final_response, model, tool_calls_made
+
+        except Exception as e:
+            err = str(e)
+            if "tool_use_failed" in err or "Failed to call a function" in err:
+                print(f"  ⚠ {model} failed tool calling, trying next model...")
+                last_error = e
+                continue
+            else:
+                raise  # Non-tool-calling error, don't retry
+
+    raise last_error  # All models failed
+
+
+# ── Simple single-query helper (no fallback) ─────────────────────────────────
 def run_query(agent, query: str, thread_id: str = "default") -> str:
     """Run a single query and return the final response text."""
     config = {"configurable": {"thread_id": thread_id}}
