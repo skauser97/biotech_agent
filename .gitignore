@@ -1,0 +1,5 @@
+.env
+__pycache__/
+*.pyc
+biotech_agent/
+.streamlit/secrets.toml

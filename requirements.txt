@@ -1,0 +1,25 @@
+# Biotech Research Assistant - Dependencies
+
+# LangGraph + LangChain core
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+
+# LLM backends (Ollama + Groq)
+langchain-ollama>=0.2.0
+langchain-groq>=0.2.0
+
+# Web search
+ddgs>=9.0.0
+
+# API requests
+requests>=2.31.0
+
+# CLI
+rich>=13.0.0
+
+# Web UI
+streamlit>=1.35.0
+
+# Config
+python-dotenv>=1.0.0
